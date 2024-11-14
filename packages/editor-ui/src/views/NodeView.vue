@@ -34,7 +34,6 @@ import {
 	NODE_CREATOR_OPEN_SOURCES,
 	CHAT_TRIGGER_NODE_TYPE,
 	MANUAL_CHAT_TRIGGER_NODE_TYPE,
-	WORKFLOW_LM_CHAT_MODAL_KEY,
 	AI_NODE_CREATOR_VIEW,
 	DRAG_EVENT_DATA_KEY,
 	UPDATE_WEBHOOK_ID_NODE_TYPES,
@@ -71,7 +70,6 @@ import type {
 	INodeInputConfiguration,
 	INodeTypeDescription,
 	ITaskData,
-	ITelemetryTrackProperties,
 	IWorkflowBase,
 	Workflow,
 	INodeOutputConfiguration,
@@ -456,13 +454,13 @@ export default defineComponent({
 				)
 			);
 		},
+		canvasChatNode() {
+			return this.nodes.find((node) => node.type === CHAT_TRIGGER_NODE_TYPE);
+		},
 		isManualChatOnly(): boolean {
 			if (!this.canvasChatNode) return false;
 
 			return this.containsChatNodes && this.triggerNodes.length === 1 && !this.pinnedChatNodeData;
-		},
-		canvasChatNode() {
-			return this.nodes.find((node) => node.type === CHAT_TRIGGER_NODE_TYPE);
 		},
 		pinnedChatNodeData() {
 			if (!this.canvasChatNode) return null;
@@ -513,6 +511,9 @@ export default defineComponent({
 				? this.projectsStore.myProjects.find((p) => p.id === this.$route.query.projectId)
 				: (this.projectsStore.currentProject ?? this.projectsStore.personalProject);
 			return getResourcePermissions(project?.scopes);
+		},
+		isChatOpen() {
+			return this.workflowsStore.isChatPanelOpen;
 		},
 	},
 	watch: {
@@ -864,7 +865,7 @@ export default defineComponent({
 			};
 			this.$telemetry.track('User clicked chat open button', telemetryPayload);
 			void this.externalHooks.run('nodeView.onOpenChat', telemetryPayload);
-			this.uiStore.openModal(WORKFLOW_LM_CHAT_MODAL_KEY);
+			this.workflowsStore.setPanelOpen('chat', !this.workflowsStore.isChatPanelOpen);
 		},
 
 		async onRunWorkflow() {
@@ -1269,7 +1270,7 @@ export default defineComponent({
 					element instanceof HTMLElement &&
 					element.className &&
 					typeof element.className === 'string' &&
-					element.className.includes('ignore-key-press')
+					element.className.includes('ignore-key-press-canvas')
 				) {
 					return;
 				}
@@ -2398,24 +2399,19 @@ export default defineComponent({
 			this.uiStore.stateIsDirty = true;
 
 			if (nodeTypeName === STICKY_NODE_TYPE) {
-				this.$telemetry.trackNodesPanel('nodeView.addSticky', {
+				this.$telemetry.track('User inserted workflow note', {
 					workflow_id: this.workflowsStore.workflowId,
 				});
 			} else {
 				void this.externalHooks.run('nodeView.addNodeButton', { nodeTypeName });
-				const trackProperties: ITelemetryTrackProperties = {
+				this.nodeCreatorStore.onNodeAddedToCanvas({
 					node_type: nodeTypeName,
 					node_version: newNodeData.typeVersion,
 					is_auto_add: isAutoAdd,
 					workflow_id: this.workflowsStore.workflowId,
 					drag_and_drop: options.dragAndDrop,
-				};
-
-				if (lastSelectedNode) {
-					trackProperties.input_node_type = lastSelectedNode.type;
-				}
-
-				this.$telemetry.trackNodesPanel('nodeView.addNodeButton', trackProperties);
+					input_node_type: lastSelectedNode ? lastSelectedNode.type : undefined,
+				});
 			}
 
 			// Automatically deselect all nodes and select the current one and also active
@@ -4242,12 +4238,13 @@ export default defineComponent({
 				mode,
 				createNodeActive,
 			});
-			this.$telemetry.trackNodesPanel('nodeView.createNodeActiveChanged', {
-				source,
-				mode,
-				createNodeActive,
-				workflow_id: this.workflowsStore.workflowId,
-			});
+			if (createNodeActive) {
+				this.nodeCreatorStore.onCreatorOpened({
+					source,
+					mode,
+					workflow_id: this.workflowsStore.workflowId,
+				});
+			}
 		},
 		async onAddNodes(
 			{ nodes, connections }: AddedNodesAndConnections,
@@ -4656,6 +4653,7 @@ export default defineComponent({
 					size="large"
 					icon="comment"
 					type="primary"
+					:outline="isChatOpen === false"
 					data-test-id="workflow-chat-button"
 					@click.stop="onOpenChat"
 				/>

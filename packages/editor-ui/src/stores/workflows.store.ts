@@ -139,6 +139,8 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 	const nodeMetadata = ref<NodeMetadataMap>({});
 	const isInDebugMode = ref(false);
 	const chatMessages = ref<string[]>([]);
+	const isChatPanelOpen = ref(false);
+	const isLogsPanelOpen = ref(false);
 
 	const workflowName = computed(() => workflow.value.name);
 
@@ -735,14 +737,23 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 		};
 	}
 
-	function setWorkflowPinData(pinData?: IPinData) {
-		workflow.value = {
-			...workflow.value,
-			pinData: pinData ?? {},
-		};
+	function setWorkflowPinData(data: IPinData = {}) {
+		const validPinData = Object.keys(data).reduce((accu, nodeName) => {
+			accu[nodeName] = data[nodeName].map((item) => {
+				if (!isJsonKeyObject(item)) {
+					return { json: item };
+				}
+
+				return item;
+			});
+
+			return accu;
+		}, {} as IPinData);
+
+		workflow.value.pinData = validPinData;
 		updateCachedWorkflow();
 
-		dataPinningEventBus.emit('pin-data', pinData ?? {});
+		dataPinningEventBus.emit('pin-data', validPinData);
 	}
 
 	function setWorkflowTagIds(tags: string[]) {
@@ -1037,10 +1048,18 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 
 	function setNodes(nodes: INodeUi[]): void {
 		workflow.value.nodes = nodes;
+		nodeMetadata.value = nodes.reduce<NodeMetadataMap>((acc, node) => {
+			acc[node.name] = { pristine: true };
+			return acc;
+		}, {});
 	}
 
-	function setConnections(connections: IConnections): void {
+	function setConnections(connections: IConnections, updateWorkflow = false): void {
 		workflow.value.connections = connections;
+
+		if (updateWorkflow) {
+			updateCachedWorkflow();
+		}
 	}
 
 	function resetAllNodesIssues(): boolean {
@@ -1109,6 +1128,11 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 	function removeNode(node: INodeUi): void {
 		const { [node.name]: removedNodeMetadata, ...remainingNodeMetadata } = nodeMetadata.value;
 		nodeMetadata.value = remainingNodeMetadata;
+
+		// If chat trigger node is removed, close chat
+		if (node.type === CHAT_TRIGGER_NODE_TYPE) {
+			setPanelOpen('chat', false);
+		}
 
 		if (workflow.value.pinData && workflow.value.pinData.hasOwnProperty(node.name)) {
 			const { [node.name]: removedPinData, ...remainingPinData } = workflow.value.pinData;
@@ -1608,6 +1632,14 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 	// End Canvas V2 Functions
 	//
 
+	function setPanelOpen(panel: 'chat' | 'logs', isOpen: boolean) {
+		if (panel === 'chat') {
+			isChatPanelOpen.value = isOpen;
+		}
+		// Logs panel open/close is tied to the chat panel open/close
+		isLogsPanelOpen.value = isOpen;
+	}
+
 	return {
 		workflow,
 		usedCredentials,
@@ -1652,6 +1684,9 @@ export const useWorkflowsStore = defineStore(STORES.WORKFLOWS, () => {
 		getWorkflowExecution,
 		getTotalFinishedExecutionsCount,
 		getPastChatMessages,
+		isChatPanelOpen: computed(() => isChatPanelOpen.value),
+		isLogsPanelOpen: computed(() => isLogsPanelOpen.value),
+		setPanelOpen,
 		outgoingConnectionsByNodeName,
 		incomingConnectionsByNodeName,
 		nodeHasOutputConnection,
