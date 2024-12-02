@@ -57,6 +57,10 @@ const SettingsExternalSecrets = async () => await import('./views/SettingsExtern
 const WorkerView = async () => await import('./views/WorkerView.vue');
 const WorkflowHistory = async () => await import('@/views/WorkflowHistory.vue');
 const WorkflowOnboardingView = async () => await import('@/views/WorkflowOnboardingView.vue');
+const TestDefinitionListView = async () =>
+	await import('./views/TestDefinition/TestDefinitionListView.vue');
+const TestDefinitionEditView = async () =>
+	await import('./views/TestDefinition/TestDefinitionEditView.vue');
 
 function getTemplatesRedirect(defaultRedirect: VIEWS[keyof VIEWS]): { name: string } | false {
 	const settingsStore = useSettingsStore();
@@ -250,6 +254,55 @@ export const routes: RouteRecordRaw[] = [
 		],
 	},
 	{
+		path: '/workflow/:name/evaluation',
+		name: VIEWS.TEST_DEFINITION,
+		meta: {
+			keepWorkflowAlive: true,
+			middleware: ['authenticated'],
+		},
+		children: [
+			{
+				path: '',
+				name: VIEWS.TEST_DEFINITION,
+				components: {
+					default: TestDefinitionListView,
+					header: MainHeader,
+					sidebar: MainSidebar,
+				},
+				meta: {
+					keepWorkflowAlive: true,
+					middleware: ['authenticated'],
+				},
+			},
+			{
+				path: 'new',
+				name: VIEWS.NEW_TEST_DEFINITION,
+				components: {
+					default: TestDefinitionEditView,
+					header: MainHeader,
+					sidebar: MainSidebar,
+				},
+				meta: {
+					keepWorkflowAlive: true,
+					middleware: ['authenticated'],
+				},
+			},
+			{
+				path: ':testId',
+				name: VIEWS.TEST_DEFINITION_EDIT,
+				components: {
+					default: TestDefinitionEditView,
+					header: MainHeader,
+					sidebar: MainSidebar,
+				},
+				meta: {
+					keepWorkflowAlive: true,
+					middleware: ['authenticated'],
+				},
+			},
+		],
+	},
+	{
 		path: '/workflow/:workflowId/history/:versionId?',
 		name: VIEWS.WORKFLOW_HISTORY,
 		components: {
@@ -427,8 +480,10 @@ export const routes: RouteRecordRaw[] = [
 	},
 	{
 		path: '/settings',
+		name: VIEWS.SETTINGS,
 		component: SettingsView,
 		props: true,
+		redirect: { name: VIEWS.USAGE },
 		children: [
 			{
 				path: 'usage',
