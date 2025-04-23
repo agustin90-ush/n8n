@@ -2,7 +2,7 @@
 import { type TreeNode as ElTreeNode } from 'element-plus';
 import { getSubtreeTotalConsumedTokens, type TreeNode } from '@/components/RunDataAi/utils';
 import { useWorkflowsStore } from '@/stores/workflows.store';
-import { computed } from 'vue';
+import { computed, useTemplateRef, watch } from 'vue';
 import { type INodeUi } from '@/Interface';
 import { N8nButton, N8nIcon, N8nIconButton, N8nText } from '@n8n/design-system';
 import { type ITaskData } from 'n8n-workflow';
@@ -17,6 +17,7 @@ const props = defineProps<{
 	data: TreeNode;
 	node: ElTreeNode;
 	isSelected: boolean;
+	isReadOnly: boolean;
 	shouldShowConsumedTokens: boolean;
 	isCompact: boolean;
 }>();
@@ -28,6 +29,7 @@ const emit = defineEmits<{
 }>();
 
 const locale = useI18n();
+const containerRef = useTemplateRef('containerRef');
 const workflowsStore = useWorkflowsStore();
 const nodeTypeStore = useNodeTypesStore();
 const node = computed<INodeUi | undefined>(() => workflowsStore.nodesByName[props.data.node]);
@@ -77,11 +79,23 @@ function isLastChild(level: number) {
 		(data?.node === lastSibling?.node && data?.runIndex === lastSibling?.runIndex)
 	);
 }
+
+// When selected, scroll into view
+watch(
+	[() => props.isSelected, containerRef],
+	([isSelected, ref]) => {
+		if (isSelected && ref) {
+			ref.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+		}
+	},
+	{ immediate: true },
+);
 </script>
 
 <template>
 	<div
 		v-if="node !== undefined"
+		ref="containerRef"
 		:class="{
 			[$style.container]: true,
 			[$style.compact]: props.isCompact,
@@ -106,9 +120,9 @@ function isLastChild(level: number) {
 			size="small"
 			:class="$style.name"
 			:color="isError ? 'danger' : undefined"
-			>{{ node.name }}</N8nText
-		>
-		<N8nText tag="div" color="text-light" size="small" :class="$style.timeTook">
+			>{{ node.name }}
+		</N8nText>
+		<N8nText v-if="!isCompact" tag="div" color="text-light" size="small" :class="$style.timeTook">
 			<I18nT v-if="isSettled && runData" keypath="logs.overview.body.summaryText">
 				<template #status>
 					<N8nText v-if="isError" color="danger" :bold="true" size="small">
@@ -126,7 +140,7 @@ function isLastChild(level: number) {
 			startedAtText
 		}}</N8nText>
 		<N8nText
-			v-if="subtreeConsumedTokens !== undefined"
+			v-if="!isCompact && subtreeConsumedTokens !== undefined"
 			tag="div"
 			color="text-light"
 			size="small"
@@ -148,6 +162,7 @@ function isLastChild(level: number) {
 			:class="$style.compactErrorIcon"
 		/>
 		<N8nIconButton
+			v-if="!props.isReadOnly"
 			type="secondary"
 			size="small"
 			icon="play"
@@ -192,29 +207,29 @@ function isLastChild(level: number) {
 	position: relative;
 	z-index: 1;
 
-	--row-gap-thickness: 1px;
-
 	& > * {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		padding: var(--spacing-2xs);
-		margin-bottom: var(--row-gap-thickness);
 	}
 }
 
 .background {
 	position: absolute;
-	left: calc(var(--row-gap-thickness) + var(--indent-depth) * 32px);
+	left: calc(var(--indent-depth) * 32px);
 	top: 0;
-	width: calc(100% - var(--indent-depth) * 32px - var(--row-gap-thickness));
-	height: calc(100% - var(--row-gap-thickness));
+	width: calc(100% - var(--indent-depth) * 32px);
+	height: 100%;
 	border-radius: var(--border-radius-base);
 	z-index: -1;
 
-	.selected &,
-	.container:hover & {
+	.selected & {
 		background-color: var(--color-foreground-base);
+	}
+
+	.container:hover:not(.selected) & {
+		background-color: var(--color-background-light-base);
 	}
 
 	.selected:not(:hover).error & {
@@ -259,6 +274,7 @@ function isLastChild(level: number) {
 }
 
 .name {
+	flex-basis: 0;
 	flex-grow: 1;
 	padding-inline-start: 0;
 }
@@ -272,20 +288,12 @@ function isLastChild(level: number) {
 		margin-right: var(--spacing-4xs);
 		vertical-align: text-bottom;
 	}
-
-	.compact:hover & {
-		width: auto;
-	}
-
-	.compact:not(:hover) & {
-		display: none;
-	}
 }
 
 .startedAt {
 	flex-grow: 0;
 	flex-shrink: 0;
-	width: 30%;
+	width: 25%;
 
 	.compact & {
 		display: none;
@@ -295,17 +303,8 @@ function isLastChild(level: number) {
 .consumedTokens {
 	flex-grow: 0;
 	flex-shrink: 0;
-	width: 10%;
+	width: 15%;
 	text-align: right;
-
-	.compact:hover & {
-		width: auto;
-	}
-
-	.compact &:empty,
-	.compact:not(:hover) & {
-		display: none;
-	}
 }
 
 .compactErrorIcon {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ViewableMimeTypes } from '@n8n/api-types';
 import { useStorage } from '@/composables/useStorage';
 import { saveAs } from 'file-saver';
 import type {
@@ -77,7 +78,6 @@ import {
 	N8nInfoTip,
 	N8nLink,
 	N8nOption,
-	N8nRadioButtons,
 	N8nSelect,
 	N8nSpinner,
 	N8nTabs,
@@ -91,6 +91,9 @@ import { useSchemaPreviewStore } from '@/stores/schemaPreview.store';
 import { asyncComputed } from '@vueuse/core';
 import { usePostHog } from '@/stores/posthog.store';
 import ViewSubExecution from './ViewSubExecution.vue';
+import RunDataItemCount from '@/components/RunDataItemCount.vue';
+import RunDataDisplayModeSelect from '@/components/RunDataDisplayModeSelect.vue';
+import RunDataPaginationBar from '@/components/RunDataPaginationBar.vue';
 
 const LazyRunDataTable = defineAsyncComponent(
 	async () => await import('@/components/RunDataTable.vue'),
@@ -118,7 +121,7 @@ type Props = {
 	runIndex: number;
 	tooMuchDataTitle: string;
 	executingMessage: string;
-	pushRef: string;
+	pushRef?: string;
 	paneType: NodePanelType;
 	noDataInBranchMessage: string;
 	node?: INodeUi | null;
@@ -134,6 +137,12 @@ type Props = {
 	isPaneActive?: boolean;
 	hidePagination?: boolean;
 	calloutMessage?: string;
+	disableRunIndexSelection?: boolean;
+	disableEdit?: boolean;
+	disablePin?: boolean;
+	compact?: boolean;
+	tableHeaderBgColor?: 'base' | 'light';
+	disableHoverHighlight?: boolean;
 };
 
 const props = withDefaults(defineProps<Props>(), {
@@ -148,7 +157,27 @@ const props = withDefaults(defineProps<Props>(), {
 	isExecuting: false,
 	hidePagination: false,
 	calloutMessage: undefined,
+	disableRunIndexSelection: false,
+	disableEdit: false,
+	disablePin: false,
+	disableHoverHighlight: false,
+	compact: false,
+	tableHeaderBgColor: 'base',
 });
+
+defineSlots<{
+	content: {};
+	'callout-message': {};
+	header: {};
+	'input-select': {};
+	'before-data': {};
+	'run-info': {};
+	'node-waiting': {};
+	'node-not-run': {};
+	'no-output-data': {};
+	'recovered-artificial-output-data': {};
+}>();
+
 const emit = defineEmits<{
 	search: [search: string];
 	runChange: [runIndex: number];
@@ -177,7 +206,6 @@ const binaryDataDisplayVisible = ref(false);
 const binaryDataDisplayData = ref<IBinaryData | null>(null);
 const currentPage = ref(1);
 const pageSize = ref(10);
-const pageSizes = [1, 10, 25, 50, 100];
 
 const pinDataDiscoveryTooltipVisible = ref(false);
 const isControlledPinDataTooltip = ref(false);
@@ -248,33 +276,6 @@ const canPinData = computed(
 		pinnedData.isValidNodeType.value &&
 		!(binaryData.value && binaryData.value.length > 0),
 );
-const displayModes = computed(() => {
-	const defaults: Array<{ label: string; value: IRunDataDisplayMode }> = [
-		{ label: i18n.baseText('runData.table'), value: 'table' },
-		{ label: i18n.baseText('runData.json'), value: 'json' },
-	];
-
-	if (binaryData.value.length) {
-		defaults.push({ label: i18n.baseText('runData.binary'), value: 'binary' });
-	}
-
-	const schemaView = { label: i18n.baseText('runData.schema'), value: 'schema' } as const;
-	if (isPaneTypeInput.value) {
-		defaults.unshift(schemaView);
-	} else {
-		defaults.push(schemaView);
-	}
-
-	if (
-		isPaneTypeOutput.value &&
-		activeNode.value?.type === HTML_NODE_TYPE &&
-		activeNode.value.parameters.operation === 'generateHtmlTemplate'
-	) {
-		defaults.unshift({ label: 'HTML', value: 'html' });
-	}
-
-	return defaults;
-});
 
 const hasNodeRun = computed(() =>
 	Boolean(
@@ -517,6 +518,9 @@ const parentNodePinnedData = computed(() => {
 });
 
 const showPinButton = computed(() => {
+	if (props.disablePin) {
+		return false;
+	}
 	if (!rawInputData.value.length && !pinnedData.hasData.value) {
 		return false;
 	}
@@ -597,6 +601,13 @@ const hasPreviewSchema = asyncComputed(async () => {
 	}
 	return false;
 }, false);
+
+const itemsCountProps = computed<InstanceType<typeof RunDataItemCount>['$props']>(() => ({
+	search: search.value,
+	dataCount: dataCount.value,
+	unfilteredDataCount: unfilteredDataCount.value,
+	subExecutionsCount: activeTaskMetadata.value?.subExecutionsCount,
+}));
 
 watch(node, (newNode, prevNode) => {
 	if (newNode?.id === prevNode?.id) return;
@@ -736,7 +747,7 @@ function getNodeHints(): NodeHint[] {
 			const workflowNode = props.workflow.getNode(node.value.name);
 
 			if (workflowNode) {
-				const nodeHints = NodeHelpers.getNodeHints(props.workflow, workflowNode, nodeType.value, {
+				const nodeHints = nodeHelpers.getNodeHints(props.workflow, workflowNode, nodeType.value, {
 					runExecutionData: workflowExecution.value?.data ?? null,
 					runIndex: props.runIndex,
 					connectionInputData: parentNodeOutputData.value,
@@ -1182,10 +1193,8 @@ function closeBinaryDataDisplay() {
 }
 
 function isViewable(index: number, key: string | number): boolean {
-	const { fileType } = binaryData.value[index][key];
-	return (
-		!!fileType && ['image', 'audio', 'video', 'text', 'json', 'pdf', 'html'].includes(fileType)
-	);
+	const { mimeType } = binaryData.value[index][key];
+	return ViewableMimeTypes.includes(mimeType);
 }
 
 function isDownloadable(index: number, key: string | number): boolean {
@@ -1310,7 +1319,10 @@ defineExpose({ enterEditMode });
 </script>
 
 <template>
-	<div :class="['run-data', $style.container]" @mouseover="activatePane">
+	<div
+		:class="['run-data', $style.container, props.compact ? $style.compact : '']"
+		@mouseover="activatePane"
+	>
 		<N8nCallout
 			v-if="
 				!isPaneTypeInput &&
@@ -1358,7 +1370,9 @@ defineExpose({ enterEditMode });
 		/>
 
 		<div :class="$style.header">
-			<slot name="header"></slot>
+			<div :class="$style.title">
+				<slot name="header"></slot>
+			</div>
 
 			<div
 				v-show="!hasRunError && !isTrimmedManualExecutionDataItem"
@@ -1378,19 +1392,27 @@ defineExpose({ enterEditMode });
 					/>
 				</Suspense>
 
-				<N8nRadioButtons
+				<RunDataDisplayModeSelect
 					v-show="
 						hasPreviewSchema ||
 						(hasNodeRun && (inputData.length || binaryData.length || search) && !editMode.enabled)
 					"
-					:model-value="displayMode"
-					:options="displayModes"
-					data-test-id="ndv-run-data-display-mode"
-					@update:model-value="onDisplayModeChange"
+					:class="$style.displayModeSelect"
+					:compact="props.compact"
+					:value="displayMode"
+					:has-binary-data="binaryData.length > 0"
+					:pane-type="paneType"
+					:node-generates-html="
+						activeNode?.type === HTML_NODE_TYPE &&
+						activeNode.parameters.operation === 'generateHtmlTemplate'
+					"
+					@change="onDisplayModeChange"
 				/>
 
+				<RunDataItemCount v-if="props.compact" v-bind="itemsCountProps" />
+
 				<N8nIconButton
-					v-if="canPinData && !isReadOnlyRoute && !readOnlyEnv"
+					v-if="!props.disableEdit && canPinData && !isReadOnlyRoute && !readOnlyEnv"
 					v-show="!editMode.enabled"
 					:title="i18n.baseText('runData.editOutput')"
 					:circle="false"
@@ -1414,7 +1436,7 @@ defineExpose({ enterEditMode });
 					@toggle-pin-data="onTogglePinData({ source: 'pin-icon-click' })"
 				/>
 
-				<div v-show="editMode.enabled" :class="$style.editModeActions">
+				<div v-if="!props.disableEdit" v-show="editMode.enabled" :class="$style.editModeActions">
 					<N8nButton
 						type="tertiary"
 						:label="i18n.baseText('runData.editor.cancel')"
@@ -1435,7 +1457,7 @@ defineExpose({ enterEditMode });
 		</div>
 
 		<div
-			v-if="maxRunIndex > 0 && !displaysMultipleNodes"
+			v-if="maxRunIndex > 0 && !displaysMultipleNodes && !props.disableRunIndexSelection"
 			v-show="!editMode.enabled"
 			:class="$style.runSelector"
 		>
@@ -1486,9 +1508,11 @@ defineExpose({ enterEditMode });
 
 		<slot v-if="!displaysMultipleNodes" name="before-data" />
 
-		<div v-if="props.calloutMessage" :class="$style.hintCallout">
+		<div v-if="props.calloutMessage || $slots['callout-message']" :class="$style.hintCallout">
 			<N8nCallout theme="info" data-test-id="run-data-callout">
-				<N8nText v-n8n-html="props.calloutMessage" size="small"></N8nText>
+				<slot name="callout-message">
+					<N8nText v-n8n-html="props.calloutMessage" size="small"></N8nText>
+				</slot>
 			</N8nCallout>
 		</div>
 
@@ -1525,6 +1549,7 @@ defineExpose({ enterEditMode });
 
 		<div
 			v-else-if="
+				!props.compact &&
 				hasNodeRun &&
 				!isSearchInSchemaView &&
 				((dataCount > 0 && maxRunIndex === 0) || search) &&
@@ -1532,37 +1557,12 @@ defineExpose({ enterEditMode });
 				!displaysMultipleNodes
 			"
 			v-show="!editMode.enabled"
-			:class="[$style.itemsCount, { [$style.muted]: paneType === 'input' && maxRunIndex === 0 }]"
+			:class="$style.itemsCount"
 			data-test-id="ndv-items-count"
 		>
 			<slot v-if="inputSelectLocation === 'items'" name="input-select"></slot>
 
-			<N8nText v-if="search" :class="$style.itemsText">
-				{{
-					i18n.baseText('ndv.search.items', {
-						adjustToNumber: unfilteredDataCount,
-						interpolate: { matched: dataCount, count: unfilteredDataCount },
-					})
-				}}
-			</N8nText>
-			<N8nText v-else :class="$style.itemsText">
-				<span>
-					{{
-						i18n.baseText('ndv.output.items', {
-							adjustToNumber: dataCount,
-							interpolate: { count: dataCount },
-						})
-					}}
-				</span>
-				<span v-if="activeTaskMetadata?.subExecutionsCount">
-					{{
-						i18n.baseText('ndv.output.andSubExecutions', {
-							adjustToNumber: activeTaskMetadata.subExecutionsCount,
-							interpolate: { count: activeTaskMetadata.subExecutionsCount },
-						})
-					}}
-				</span>
-			</N8nText>
+			<RunDataItemCount v-bind="itemsCountProps" />
 			<ViewSubExecution
 				v-if="activeTaskMetadata && !(paneType === 'input' && hasInputOverwrite)"
 				:task-metadata="activeTaskMetadata"
@@ -1778,6 +1778,9 @@ defineExpose({ enterEditMode });
 					:total-runs="maxRunIndex"
 					:has-default-hover-state="paneType === 'input' && !search"
 					:search="search"
+					:header-bg-color="tableHeaderBgColor"
+					:compact="props.compact"
+					:disable-hover-highlight="props.disableHoverHighlight"
 					@mounted="emit('tableMounted', $event)"
 					@active-row-changed="onItemHover"
 					@display-mode-change="onDisplayModeChange"
@@ -1797,6 +1800,7 @@ defineExpose({ enterEditMode });
 					:output-index="currentOutputIndex"
 					:total-runs="maxRunIndex"
 					:search="search"
+					:compact="props.compact"
 				/>
 			</Suspense>
 
@@ -1817,6 +1821,7 @@ defineExpose({ enterEditMode });
 					:total-runs="maxRunIndex"
 					:search="search"
 					:class="$style.schema"
+					:compact="props.compact"
 					@clear:search="onSearchClear"
 				/>
 			</Suspense>
@@ -1906,8 +1911,11 @@ defineExpose({ enterEditMode });
 					</div>
 				</div>
 			</div>
+			<div v-else-if="!hasNodeRun" :class="$style.center">
+				<slot name="node-not-run"></slot>
+			</div>
 		</div>
-		<div
+		<RunDataPaginationBar
 			v-if="
 				hidePagination === false &&
 				hasNodeRun &&
@@ -1918,34 +1926,12 @@ defineExpose({ enterEditMode });
 				!isArtificialRecoveredEventItem
 			"
 			v-show="!editMode.enabled"
-			:class="$style.pagination"
-			data-test-id="ndv-data-pagination"
-		>
-			<el-pagination
-				background
-				:hide-on-single-page="true"
-				:current-page="currentPage"
-				:pager-count="5"
-				:page-size="pageSize"
-				layout="prev, pager, next"
-				:total="dataCount"
-				@update:current-page="onCurrentPageChange"
-			>
-			</el-pagination>
-
-			<div :class="$style.pageSizeSelector">
-				<N8nSelect
-					size="mini"
-					:model-value="pageSize"
-					teleported
-					@update:model-value="onPageSizeChange"
-				>
-					<template #prepend>{{ i18n.baseText('ndv.output.pageSize') }}</template>
-					<N8nOption v-for="size in pageSizes" :key="size" :label="size" :value="size"> </N8nOption>
-					<N8nOption :label="i18n.baseText('ndv.output.all')" :value="dataCount"> </N8nOption>
-				</N8nSelect>
-			</div>
-		</div>
+			:current-page="currentPage"
+			:page-size="pageSize"
+			:total="dataCount"
+			@update:current-page="onCurrentPageChange"
+			@update:page-size="onPageSizeChange"
+		/>
 		<N8nBlockUi :show="blockUI" :class="$style.uiBlocker" />
 	</div>
 </template>
@@ -1974,7 +1960,6 @@ defineExpose({ enterEditMode });
 	position: relative;
 	width: 100%;
 	height: 100%;
-	background-color: var(--color-run-data-background);
 	display: flex;
 	flex-direction: column;
 }
@@ -1997,6 +1982,16 @@ defineExpose({ enterEditMode });
 	overflow-y: hidden;
 	min-height: calc(30px + var(--spacing-s));
 	scrollbar-width: thin;
+	container-type: inline-size;
+
+	.compact & {
+		margin-bottom: var(--spacing-4xs);
+		padding: var(--spacing-2xs);
+		margin-bottom: 0;
+		flex-shrink: 0;
+		flex-grow: 0;
+		min-height: auto;
+	}
 
 	> *:first-child {
 		flex-grow: 1;
@@ -2007,12 +2002,6 @@ defineExpose({ enterEditMode });
 	position: relative;
 	overflow-y: auto;
 	height: 100%;
-
-	&:hover {
-		.actions-group {
-			opacity: 1;
-		}
-	}
 }
 
 .dataDisplay {
@@ -2025,6 +2014,10 @@ defineExpose({ enterEditMode });
 	line-height: var(--font-line-height-xloose);
 	word-break: normal;
 	height: 100%;
+
+	.compact & {
+		padding: 0 var(--spacing-2xs);
+	}
 }
 
 .inlineError {
@@ -2059,18 +2052,6 @@ defineExpose({ enterEditMode });
 	padding-right: var(--spacing-s);
 	padding-bottom: var(--spacing-s);
 	flex-flow: wrap;
-
-	.itemsText {
-		flex-shrink: 0;
-		overflow: hidden;
-		white-space: nowrap;
-		text-overflow: ellipsis;
-	}
-
-	&.muted .itemsText {
-		color: var(--color-text-light);
-		font-size: var(--font-size-2xs);
-	}
 }
 
 .inputSelect {
@@ -2105,22 +2086,6 @@ defineExpose({ enterEditMode });
 
 .search {
 	margin-left: auto;
-}
-
-.pagination {
-	width: 100%;
-	display: flex;
-	justify-content: center;
-	align-items: center;
-	bottom: 0;
-	padding: 5px;
-	overflow-y: hidden;
-}
-
-.pageSizeSelector {
-	text-transform: capitalize;
-	max-width: 150px;
-	flex: 0 1 auto;
 }
 
 .binaryIndex {
@@ -2187,8 +2152,14 @@ defineExpose({ enterEditMode });
 .displayModes {
 	display: flex;
 	justify-content: flex-end;
+	align-items: center;
 	flex-grow: 1;
 	gap: var(--spacing-2xs);
+
+	.compact & {
+		/* let title text alone decide the height */
+		height: 0;
+	}
 }
 
 .tooltipContain {
@@ -2259,10 +2230,34 @@ defineExpose({ enterEditMode });
 	margin-bottom: var(--spacing-xs);
 	margin-left: var(--spacing-s);
 	margin-right: var(--spacing-s);
+
+	.compact & {
+		margin: 0 var(--spacing-2xs) var(--spacing-2xs) var(--spacing-2xs);
+	}
 }
 
 .schema {
 	padding: 0 var(--spacing-s);
+}
+
+.search,
+.displayModeSelect {
+	.compact:not(:hover) & {
+		opacity: 0;
+		display: none;
+	}
+
+	.compact:hover & {
+		opacity: 1;
+	}
+}
+
+@container (max-width: 240px) {
+	/* Hide title when the panel is too narrow */
+	.compact:hover .title {
+		visibility: hidden;
+		width: 0;
+	}
 }
 </style>
 
